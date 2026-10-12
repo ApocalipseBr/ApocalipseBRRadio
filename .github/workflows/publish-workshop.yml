@@ -106,6 +106,7 @@ jobs:
           command -v python3 >/dev/null || { echo "::error::Install python3 on the home runner."; exit 1; }
           command -v gh >/dev/null || { echo "::error::Install GitHub CLI (gh) on the home runner."; exit 1; }
           command -v docker >/dev/null || { echo "::error::Install Docker on the home runner."; exit 1; }
+          python3 -c 'import fcntl' || { echo "::error::The publishing worker requires Linux file locking."; exit 1; }
           docker info >/dev/null 2>&1 || { echo "::error::Start Docker and grant the runner user access to its daemon."; exit 1; }
       - name: Check out publishing tools
         uses: actions/checkout@v4
@@ -138,6 +139,8 @@ jobs:
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
           WORKSHOP_ID: ${{ inputs.workshop-id }}
           SOURCE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
+          STEAM_SECRETS_ORGANIZATION: ${{ inputs.steam-secrets-organization }}
         run: |
           set -euo pipefail
           if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" ]]; then
@@ -145,49 +148,9 @@ jobs:
             exit 1
           fi
           docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
-          # Keep the stopped container until the refreshed config has been exported.
-          publish_status=0
-          docker run --init --name "$WORKSHOP_CONTAINER" \
-            --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
-            --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
-            pz-workshop-publisher || publish_status=$?
-          case "$publish_status" in
-            0)
-              echo "publication=confirmed" >> "$GITHUB_OUTPUT"
-              echo "Workshop publication confirmed." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            2)
-              echo "publication=unconfirmed" >> "$GITHUB_OUTPUT"
-              echo "::warning::Workshop publication is unconfirmed; server restart skipped."
-              echo "Workshop upload attempted, publication unconfirmed. Steam login will be preserved. Server restart skipped; verify the Workshop item before retrying." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "publication=failed" >> "$GITHUB_OUTPUT"
-              exit "$publish_status"
-              ;;
-          esac
-      - name: Preserve refreshed Steam login in organization secret
-        if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
-        env:
-          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
-          GH_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
-          STEAM_SECRETS_ORGANIZATION: ${{ inputs.steam-secrets-organization }}
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p "$RUNNER_TEMP/steam-session"
-          if ! docker cp "$WORKSHOP_CONTAINER:/home/steam/steamcmd/authenticated" "$RUNNER_TEMP/steam-session/authenticated" 2>/dev/null; then
-            echo "Steam login was not confirmed; retaining the existing organization session secret."
-            exit 0
-          fi
-          docker cp "$WORKSHOP_CONTAINER:/home/steam/steamcmd/config/config.vdf" "$RUNNER_TEMP/steam-session/config.vdf" 2>/dev/null || {
-            echo "::error::Steam login state could not be exported; the existing organization secret was retained."
-            exit 1
-          }
-          chmod 600 "$RUNNER_TEMP/steam-session/config.vdf"
-          python3 .workshop-tools/scripts/workshop/steam_session.py --save "$RUNNER_TEMP/steam-session/config.vdf"
+          python3 .workshop-tools/scripts/workshop/run_publisher.py
       - name: Request server restart after successful Steam publish
-        if: always() && !cancelled() && steps.steam.outcome == 'success' && steps.steam.outputs.publication == 'confirmed'
+        if: always() && !cancelled() && steps.steam.outputs.publication == 'confirmed'
         env:
           PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
           PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}

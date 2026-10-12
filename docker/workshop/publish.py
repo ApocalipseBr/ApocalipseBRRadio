@@ -11,6 +11,62 @@ import tempfile
 
 
 UNCONFIRMED_REASON = "Steam authenticated, but its output did not confirm publication of the target Workshop item."
+RESULT_NAMES = {1: "OK", 2: "Fail", 8: "InvalidParam", 9: "FileNotFound", 15: "AccessDenied",
+                16: "Timeout", 25: "LimitExceeded", 33: "LockingFailed",
+                34: "LogonSessionReplaced", 84: "RateLimitExceeded"}
+
+
+def upload_log_paths(runtime):
+    # SteamCMD installations can use either their runtime or ~/Steam for logs.
+    roots = {runtime, Path.home() / "Steam", runtime / "Steam"}
+    return sorted({root / relative for root in roots for relative in (
+        "workshopbuilds/depot_build_108600.log", "logs/workshop_log.txt",
+        "logs/Workshop_log.txt", "depot_build_output/depot_build_108600.log",
+    )})
+
+
+def log_snapshot(paths):
+    snapshot = {}
+    for path in paths:
+        try:
+            stat = path.stat()
+            snapshot[path] = (stat.st_ino, stat.st_size)
+        except FileNotFoundError:
+            pass
+    return snapshot
+
+
+def fresh_upload_logs(paths, snapshot):
+    chunks = []
+    count = 0
+    for path in paths:
+        try:
+            stat = path.stat()
+            inode, offset = snapshot.get(path, (None, 0))
+            if inode != stat.st_ino or stat.st_size < offset:
+                offset = 0
+            if stat.st_size == offset:
+                continue
+            # Read only this attempt's tail, bounded even for verbose builds.
+            with path.open("rb") as log:
+                log.seek(max(offset, stat.st_size - 2 * 1024 * 1024))
+                chunks.append(log.read().decode("utf-8", errors="replace"))
+            count += 1
+        except FileNotFoundError:
+            continue
+    return count, "\n".join(chunks)
+
+
+def terminal_diagnostics(output):
+    # Extract only known categories and numeric EResult values. Never copy a
+    # Steam line, account name, URL, path, token, or unknown textual result.
+    terminal = re.findall(
+        r"(?:Failed to (?:update|publish) workshop item|SubmitItemUpdate(?:Result)?)[^\r\n]{0,120}", output, re.I)
+    codes = sorted({int(a or b) for line in terminal for a, b in re.findall(
+        r"\(\s*([0-9]{1,3})\s*\)|(?:EResult|result(?: code)?)\s*[:=]\s*([0-9]{1,3})\b", line, re.I)})
+    failed = bool(re.search(r"Failed to (?:update|publish) workshop item", output, re.I)) or any(code != 1 for code in codes)
+    return {"commit_failed": failed, "result_codes": codes,
+            "result_names": [RESULT_NAMES.get(code, "Unknown") for code in codes]}
 
 
 def quoted(value):
@@ -57,6 +113,14 @@ def failure_reason(output, authenticated=False):
         return "Steam could not load or parse the Workshop upload VDF."
     if re.search(r"Content root folder does not exist", output, re.I):
         return "Steam could not find the Workshop content directory."
+    if re.search(r"RateLimitExceeded|rate limit exceeded", output, re.I):
+        return "Steam reported a temporary rate limit."
+    if re.search(r"LockingFailed|failed to (?:acquire|aquire).*UGC.*lock", output, re.I):
+        return "Steam could not acquire the Workshop update lock."
+    if re.search(r"LogonSessionReplaced|logon session.*replaced", output, re.I):
+        return "Steam reported that another login replaced this session."
+    if re.search(r"LimitExceeded", output, re.I):
+        return "Steam reported a size or storage quota limit."
     if not authenticated and re.search(r"Steam Guard|two[- ]?factor|AccountLogonDenied|authenticator code|InvalidLoginAuthCode", output, re.I):
         return "Steam requested or rejected Steam Guard authentication."
     if not authenticated and re.search(r"Invalid Password|InvalidPassword|Invalid Login|InvalidLogin", output, re.I):
@@ -109,8 +173,8 @@ def publication_status(output, item_id, returncode, authenticated):
 def main():
     # SteamCMD stores config/ssfn state beside its executable, not only in ~/.steam.
     runtime = Path.home() / "steamcmd"
-    if not runtime.exists():
-        shutil.copytree("/opt/steamcmd", runtime)
+    if not (runtime / "steamcmd.sh").exists():
+        shutil.copytree("/opt/steamcmd", runtime, dirs_exist_ok=True)
     steamcmd = str(runtime / "steamcmd.sh")
     os.chdir(runtime)
     # Used only for the documented interactive Steam Guard bootstrap.
@@ -119,7 +183,10 @@ def main():
     if sys.argv[1:]:
         raise ValueError("Unsupported publisher argument")
     username = os.environ.get("STEAM_USERNAME", "")
-    restore_config(runtime, os.environ.get("STEAM_CONFIG_VDF", ""))
+    if os.environ.get("STEAM_STATE_PERSISTENT") == "1" and (runtime / "config/config.vdf").is_file():
+        print("Using the runner's latest remembered Steam login.", flush=True)
+    else:
+        restore_config(runtime, os.environ.get("STEAM_CONFIG_VDF", ""))
     marker = runtime / "authenticated"
     marker.unlink(missing_ok=True)
     item_id = os.environ.get("WORKSHOP_ID", "")
@@ -128,7 +195,7 @@ def main():
                    password=os.environ.get("STEAM_PASSWORD", ""), authentication_marker=marker)
 
 
-def publish(package, steamcmd, username, item_id, sha, password="", authentication_marker=None):
+def publish(package, steamcmd, username, item_id, sha, password="", authentication_marker=None, log_paths=None):
     if not username:
         raise ValueError("STEAM_USERNAME is required")
     if not re.fullmatch(r"[1-9][0-9]{0,19}", item_id):
@@ -155,6 +222,7 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
         commands = Path(directory) / "publish.txt"
         print("Trying remembered Steam login and upload in the same process.", flush=True)
         attempts = [None, password] if password else [None]
+        log_paths = upload_log_paths(Path(steamcmd).parent) if log_paths is None else log_paths
         for login_password in attempts:
             if login_password is not None:
                 print("Remembered login failed. Starting password login and upload; "
@@ -165,13 +233,22 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
                 + (" " + quoted(login_password) if login_password is not None else "")
                 + "\ninfo\nworkshop_build_item " + quoted(str(vdf)) + "\nquit\n", encoding="utf-8")
             commands.chmod(0o600)
+            before_logs = log_snapshot(log_paths)
             # Steam logs can contain account/session details. Never print raw output.
-            result = subprocess.run(
-                [steamcmd, "+runscript", str(commands)], stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                errors="replace", timeout=1200,
-            )
+            try:
+                result = subprocess.run(
+                    [steamcmd, "+runscript", str(commands)], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    errors="replace", timeout=1200,
+                )
+            except subprocess.TimeoutExpired:
+                log_count, log_output = fresh_upload_logs(log_paths, before_logs)
+                diagnostics = terminal_diagnostics(log_output)
+                diagnostics.update(fresh_log_files=log_count, publication="unconfirmed", timed_out=True)
+                print("Steam upload result: " + json.dumps(diagnostics, sort_keys=True), flush=True)
+                raise
             output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout)
+            log_count, log_output = fresh_upload_logs(log_paths, before_logs)
             authenticated = bool(re.search(r"Logon state:\s*Logged On\b", output, re.I))
             if authenticated and authentication_marker is not None:
                 authentication_marker.write_text("confirmed\n", encoding="utf-8")
@@ -190,9 +267,17 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
         # The manifest and generated VDF above already pin the target item.
         success = publication_confirmed(output, item_id)
         status = publication_status(output, item_id, result.returncode, authenticated)
+        diagnostics = terminal_diagnostics(output + "\n" + log_output)
+        diagnostics["fresh_log_files"] = log_count
+        diagnostics["publication"] = {0: "confirmed", 1: "failed", 2: "unconfirmed"}[status]
+        if diagnostics["commit_failed"]:
+            status = 1
+            diagnostics["publication"] = "failed"
+        print("Steam upload result: " + json.dumps(diagnostics, sort_keys=True), flush=True)
         if status != 0:
             prefix = "::warning::Workshop upload attempted; publication is unconfirmed. " if status == 2 else "SteamCMD did not confirm publication. "
-            print(prefix + failure_reason(output, authenticated) +
+            reason_output = output + "\n" + log_output + "\n" + " ".join(diagnostics["result_names"])
+            print(prefix + failure_reason(reason_output, authenticated) +
                   " SteamCMD exit status: " + str(result.returncode) +
                   ". Raw Steam output remains hidden.", file=sys.stderr)
             print("Upload diagnostics: login=" + ("confirmed" if authenticated else "unconfirmed")

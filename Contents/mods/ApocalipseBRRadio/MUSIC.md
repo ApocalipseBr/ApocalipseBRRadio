@@ -1,5 +1,34 @@
 # Music contract (framework v2.3.0)
 
+## Zombie attraction
+
+Music station registration accepts `attractZombies = true` (optional boolean,
+default off). While that station airs a song in `play` or `transition`, loaded
+receivers emit repeating AI world sounds once per real second. The server owns
+these sounds in multiplayer; single-player emits them locally. Client FMOD
+playback never emits duplicate AI sounds.
+
+At full receiver volume the AI sound has radius 100 tiles and strength 60,
+matching the vanilla vehicle siren's zombie sound values and update interval.
+Both values scale linearly with the receiver volume. This is separate from the
+music's audible propagation and speaker attenuation. Placed radios, installed
+vehicle radios, and living players' equipped radios are supported. Powered-off,
+muted, removed, retuned, blocked, or recorded-media receivers emit nothing;
+equipped radios with headphones also emit nothing. Announcements, talk, idle,
+end pauses, disabled stations, and stopped songs do not generate this extra noise.
+Previously emitted sounds follow the engine's normal lifetime.
+
+```lua
+ABRRadio.registerMusicStation({
+    id = "my_lure", frequency = 94400,
+    name = "My lure station", attractZombies = true,
+})
+```
+
+The Music Pack supplies `amp_lure` at 94.4 FM alongside `amp_music` at 94.2 FM.
+Its lure song IDs use `amp_lure_<hash>` and reuse the same script sound names.
+For RCON requests, use the desired station ID and the existing script sound name.
+
 ## RCON jukebox
 
 Enable `ApocalipseBrRCONextension` on server and clients to receive requests.
