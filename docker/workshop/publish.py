@@ -26,9 +26,27 @@ def restore_config(runtime, encoded):
     config_path.chmod(0o600)
 
 
-def failure_reason(output):
+def publication_confirmed(output, item_id):
+    # Do not require Success. to end the console line: SteamCMD can append
+    # command echoes or item details to the commit confirmation.
+    published = re.search(r"Success\.\s+(?:Published|Updated)\s+Item\s+([0-9]+)\b", output, re.I)
+    if published:
+        return published.group(1) == item_id
+    committed = re.search(r"\bCommitting update\.\.\.\s*Success\.(?=\s|$)([^\r\n]*)", output, re.I)
+    if not committed:
+        return False
+    details = committed.group(1)
+    if re.search(r"Created new item", details, re.I):
+        return False
+    # A reported item ID must still agree with the manifest and upload VDF.
+    reported_ids = re.findall(
+        r"(?:PublishedFileId|File\s*ID)\s*[:=]?\s*([0-9]+)\b|\(\s*([0-9]+)\s*\)", details, re.I)
+    return all((named or parenthesized) == item_id for named, parenthesized in reported_ids)
+
+
+def failure_reason(output, authenticated=False):
     # Classify known messages; never print raw Steam output or account details.
-    if re.search(r"cached credentials not found|no cached credentials|cached credential is invalid|invalid cached credentials", output, re.I):
+    if not authenticated and re.search(r"cached credentials not found|no cached credentials|cached credential is invalid|invalid cached credentials", output, re.I):
         return "Steam could not find usable remembered credentials."
     if re.search(r"not logged (?:on|in)", output, re.I):
         return "The upload process was not logged in to Steam."
@@ -36,9 +54,9 @@ def failure_reason(output):
         return "Steam could not load or parse the Workshop upload VDF."
     if re.search(r"Content root folder does not exist", output, re.I):
         return "Steam could not find the Workshop content directory."
-    if re.search(r"Steam Guard|two[- ]?factor|AccountLogonDenied|authenticator code|InvalidLoginAuthCode", output, re.I):
+    if not authenticated and re.search(r"Steam Guard|two[- ]?factor|AccountLogonDenied|authenticator code|InvalidLoginAuthCode", output, re.I):
         return "Steam requested or rejected Steam Guard authentication."
-    if re.search(r"Invalid Password|InvalidPassword|Invalid Login|InvalidLogin", output, re.I):
+    if not authenticated and re.search(r"Invalid Password|InvalidPassword|Invalid Login|InvalidLogin", output, re.I):
         return "Steam rejected the login credentials or remembered session."
     if re.search(r"Access Denied|AccessDenied|InsufficientPrivilege|does not own|No subscription", output, re.I):
         return "Steam denied account access to the game or Workshop item."
@@ -46,6 +64,10 @@ def failure_reason(output):
         return "Steam requires acceptance of the Workshop agreement."
     if re.search(r"No Connection|NoConnection|ConnectFailed|connection.*failed|timed out", output, re.I):
         return "Steam reported a connection failure."
+    if re.search(r"Failed to (?:update|publish) workshop item", output, re.I):
+        return "Steam reported a Workshop publication failure."
+    if authenticated:
+        return "Steam authenticated, but its output did not confirm publication of the target Workshop item."
     return "Steam returned an unrecognized failure or did not confirm the target Workshop item."
 
 
@@ -131,22 +153,17 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
         # Current SteamCMD confirms existing-item updates with
         # "Committing update...Success.", without repeating the item ID.
         # The manifest and generated VDF above already pin the target item.
-        success = re.search(
-            r"Success\.\s+(?:Published|Updated)\s+Item\s+" + re.escape(item_id) + r"\b",
-            output, re.IGNORECASE,
-        ) or re.search(
-            r"\bCommitting update\.\.\.[ \t\r\n]*Success\.[ \t]*\r?$",
-            output, re.IGNORECASE | re.MULTILINE,
-        )
+        success = publication_confirmed(output, item_id)
         if result.returncode != 0 or not authenticated or not success:
-            print("SteamCMD did not confirm publication. " + failure_reason(result.stdout) +
+            print("SteamCMD did not confirm publication. " + failure_reason(output, authenticated) +
                   " SteamCMD exit status: " + str(result.returncode) +
                   ". Raw Steam output remains hidden.", file=sys.stderr)
             print("Upload diagnostics: login=" + ("confirmed" if authenticated else "unconfirmed")
                   + ", preparing=" + str(bool(re.search(r"Preparing (?:update|content)", output, re.I)))
                   + ", uploading=" + str(bool(re.search(r"Uploading (?:content|preview)", output, re.I)))
                   + ", committing=" + str(bool(re.search(r"Committing update", output, re.I)))
-                  + ", success_message=" + str(bool(re.search(r"Success\.", output, re.I))), file=sys.stderr)
+                  + ", success_message=" + str(bool(re.search(r"Success\.", output, re.I)))
+                  + ", publication_confirmed=" + str(success), file=sys.stderr)
             return 1
         print("Published Workshop item " + item_id + " from commit " + sha)
         return 0

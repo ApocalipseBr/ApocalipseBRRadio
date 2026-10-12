@@ -70,6 +70,29 @@ class SteamAuthenticationTests(unittest.TestCase):
         self.assertTrue(self.marker.exists())
         self.assertIn("login=confirmed", output)
 
+    def test_mobile_guard_approval_and_commit_with_command_echo_confirm_publication(self):
+        status, scripts, output = self.publish([
+            (0, "No cached credentials"),
+            (0, "Approve this sign-in in Steam Guard\nLogon state: Logged On\n"
+                "Preparing update...Uploading content...Committing update...Success. quit\n"),
+        ])
+        self.assertEqual(0, status)
+        self.assertEqual(2, len(scripts))
+        self.assertTrue(self.marker.exists())
+        self.assertIn("Published Workshop item " + ITEM, output)
+
+    def test_guard_prompt_before_authenticated_upload_failure_is_not_a_guard_error(self):
+        status, scripts, output = self.publish([
+            (0, "Steam Guard approval requested\nLogon state: Logged On\n"
+                "Preparing update...Uploading content...Committing update..."
+                "ERROR! Failed to update workshop item.\nSuccess.\n"),
+        ])
+        self.assertEqual(1, status)
+        self.assertEqual(1, len(scripts))
+        self.assertIn("Steam reported a Workshop publication failure.", output)
+        self.assertIn("publication_confirmed=False", output)
+        self.assertNotIn("Steam requested or rejected Steam Guard", output)
+
     def test_uncertain_upload_or_login_failure_never_retries(self):
         for output in ["Unknown failure", "Uploading content...No cached credentials",
                        "Success.\nNo cached credentials", "Committing update...Success.\n"]:
