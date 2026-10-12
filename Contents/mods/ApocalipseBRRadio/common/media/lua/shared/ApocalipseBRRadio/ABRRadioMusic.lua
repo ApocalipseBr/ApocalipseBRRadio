@@ -35,6 +35,9 @@ M.SPEAKER_REFERENCE_RANGE = 15
 M.PORTABLE_SPEAKER_SCALE = 0.6
 M.VEHICLE_SPEAKER_SCALE = 1
 M.STATIONARY_SPEAKER_SCALE = 1
+-- Vanilla vehicle siren AI sound values (independent of audible music range).
+M.ZOMBIE_SOUND_RADIUS = 100
+M.ZOMBIE_SOUND_VOLUME = 60
 
 -- Allow three complete scans before rejecting a cached discovery snapshot.
 -- Scan length grows with station count: the authority visits one per tick.
@@ -54,6 +57,8 @@ function M.registerStation(config)
     assert(type(config.frequency) == "number" and config.frequency > 0
         and config.frequency == math.floor(config.frequency), "Station needs an integer frequency")
     assert(config.isTV ~= true, "Music stations must be radio channels")
+    assert(config.attractZombies == nil or type(config.attractZombies) == "boolean",
+        "attractZombies must be a boolean")
     assert(not ABRRadio.getChannelIdByFrequency(config.frequency), "Radio frequency already registered")
     config.color = config.color or { r = 0.8, g = 0.65, b = 0.25 }
     config.signalStrength = config.signalStrength or -1

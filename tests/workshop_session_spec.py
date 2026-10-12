@@ -26,6 +26,24 @@ publisher = load("session_publisher", "docker/workshop/publish.py")
 
 
 class SteamSessionTests(unittest.TestCase):
+    def test_persistent_runner_config_wins_over_stale_or_invalid_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            runtime = home / "steamcmd"
+            (runtime / "config").mkdir(parents=True)
+            (runtime / "steamcmd.sh").write_text("fixture")
+            (runtime / "config/config.vdf").write_bytes(b"fresh-runner-session")
+            previous_cwd = Path.cwd()
+            try:
+                with patch.object(publisher.Path, "home", return_value=home), \
+                        patch.dict(os.environ, {"STEAM_STATE_PERSISTENT": "1", "STEAM_CONFIG_VDF": "stale-invalid-secret"}), \
+                        patch.object(publisher.sys, "argv", ["publisher"]), \
+                        patch.object(publisher, "publish", return_value=0), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(0, publisher.main())
+                self.assertEqual(b"fresh-runner-session", (runtime / "config/config.vdf").read_bytes())
+            finally:
+                os.chdir(previous_cwd)
+
     def test_http_failures_show_operation_and_status_without_raw_output(self):
         failure = subprocess.CalledProcessError(1, ["gh"], stderr=b"private-token: Forbidden (HTTP 403)")
         output = io.StringIO()

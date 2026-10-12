@@ -125,8 +125,13 @@ same machine if remembered authentication fails. A matching home IP does not
 replace Steam's device/account security checks.
 
 Each job uses a unique `pz-workshop-<run-id>-<attempt>` container. Normal cleanup
-removes it and exported authentication data; session refresh and the restart API
-retain their existing behavior. Interrupted WSL/runner shutdown can leave containers
+removes it and the staged package. Radio publishing now retains a private
+account directory under `~/.local/state/apocalipse-steam/` (or `STEAM_STATE_ROOT`),
+uses its latest login config, and holds a Linux file lock through upload and
+organization-secret backup. Other mod workflows must use the same runner wrapper
+and directory to share this lock; separate machines are not coordinated. The
+container runs as the service user's UID/GID. Raw Steam logs stay private there;
+CI prints only safe result-code diagnostics. Interrupted WSL/runner shutdown can leave containers
 and private logs behind on this persistent host. Inspect stale containers with
 `docker ps -a`, then remove the specific old container once you confirm that no
 publication is running. After a possibly successful upload, check the Workshop

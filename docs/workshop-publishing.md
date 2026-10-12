@@ -71,8 +71,14 @@ password again issues a new Steam Guard challenge. The
 [Workshop documentation](https://partner.steamgames.com/doc/features/workshop/implementation)
 documents `workshop_build_item` for updating an existing item.
 
-The workflow restores the remembered-login config from `STEAM_CONFIG_VDF` into
-an ephemeral Docker container. Each SteamCMD script logs in, runs `info`, uploads,
+The workflow uses `run_publisher.py` to lock a private account directory on the
+Linux runner. By default it is under `~/.local/state/apocalipse-steam/`, keyed by
+a hash of the Steam username; `STEAM_STATE_ROOT` can select a shared location.
+The directory is mode `0700`, and the container runs with the runner's UID/GID.
+Its home is bind-mounted there, preserving SteamCMD and its login/device state.
+An existing runner config takes precedence over `STEAM_CONFIG_VDF`; the secret
+only seeds a missing config. This avoids overwriting fresh state with the older
+secret captured when GitHub queued the workflow. Each SteamCMD script logs in, runs `info`, uploads,
 then quits, so the upload uses that process's authenticated session. A known
 remembered-credential failure before any upload activity permits one fresh attempt
 using `STEAM_PASSWORD`, with a prompt for Steam mobile approval. Unknown failures
@@ -80,17 +86,21 @@ and failed or uncertain uploads never trigger another upload automatically.
 Confirmation requires exit zero, `Logon state: Logged On`, and Workshop commit
 success. Each attempt has a 20-minute timeout; the job has a 30-minute limit.
 
-After confirmed authentication, it copies the resulting config out and updates
-the same organization secret even if the subsequent Workshop operation fails.
-An `authenticated` marker records successful login in the container. Without it,
-the refresh step retains the existing secret instead of saving failed-login state. It deletes the container, exported
-config and staged content during cleanup. No login state enters artifacts or
+After confirmed authentication, it backs up the persistent config to the same
+organization secret even if publication fails. The account lock covers both
+upload and backup, waits up to five minutes, and releases on exit. A stale
+`authenticated` marker is cleared before each invocation. Without a fresh marker,
+the organization secret is retained. Timeout/cancellation stops the attached
+container before releasing the lock. Cleanup removes the container and staged
+package; persistent login state and private Steam logs remain on the runner.
+No login state enters artifacts or
 Actions caches; secrets are never printed or embedded in the image. Pull requests
 only run package/tests, not authentication, publishing or secret-writing steps.
 
 Install Docker, Python and `gh` on the home runner. Docker uses the home
 connection directly; VPN, dynamic DNS, router forwarding and a newer Windows
-mirrored-networking version are not required. No persistent Docker volume is required. The account must still own the Workshop
+mirrored-networking version are not required. The persistent directory is created
+automatically; no named Docker volume is required. The account must still own the Workshop
 item, meet the game's requirements and have accepted the Workshop agreement.
 Steam's remembered login is not guaranteed to survive a new machine/IP, expiry or
 account security changes. The password fallback supports accounts for which
@@ -195,7 +205,14 @@ conflicting item IDs, incomplete upload phases, and nonzero SteamCMD exits still
 fail. Publisher exit `0` means confirmed and exit `1` means failed.
 
 Raw Steam output is not printed/uploaded because it can contain account/session
-information. Diagnose Steam login, item ownership, agreements, or connectivity
+information. Before each attempt the publisher snapshots upload-log offsets;
+only new bytes are inspected, including truncated/rotated files. It searches
+the runtime and `~/Steam` log locations documented by Valve and prints a safe
+`Steam upload result` JSON summary: fresh-log count, commit-failure flag, numeric
+EResult codes, allowlisted result names, and publication status. A fresh terminal
+commit failure overrides an apparent stdout success. Unknown text is never
+echoed, and generic log successes do not establish publication. Raw logs remain
+private on the runner for trusted inspection. Diagnose Steam login, item ownership, agreements, or connectivity
 through a trusted local interactive container when publishing fails. A Workshop publish is
 an external side effect: inspect the changenote before retrying an uncertain run.
 There is no automatic rollback.
@@ -212,14 +229,19 @@ succeeded. Only explicit confirmation of the target Workshop item permits the
 pzmanager restart hook.
 
 Publishing jobs share an account concurrency group without cancelling active
-uploads. GitHub concurrency is per repository and not FIFO; pending commits can
+uploads. The runner file lock coordinates cooperating workflows using the same
+state directory on the same host and service user. Other mod workflows must
+adopt `run_publisher.py` to participate. It does not coordinate separate machines;
+use a single publishing host for this account.
+
+GitHub concurrency is per repository; pending commits can
 be superseded by later pushes. When reusing one account across repositories,
 use separate Steam accounts/session secrets or a centralized publishing workflow
 for organization-wide serialization. Separate repositories do not share a GitHub
 concurrency lock. Organization secrets are snapshotted when a workflow is queued;
 a queued run can still receive the previous config after another run refreshes it.
 Do not run multiple publishers simultaneously against the same account/config.
-Cleanup deletes the container and exported login state on the home runner.
+Cleanup deletes the container and staged package, retaining runner login state.
 After an interrupted runner process, inspect and remove stale `pz-workshop-<run-id>-<attempt>`
 containers before rerunning. Never reset a possibly published item blindly.
 
