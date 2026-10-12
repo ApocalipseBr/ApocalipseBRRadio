@@ -10,6 +10,9 @@ import sys
 import tempfile
 
 
+UNCONFIRMED_REASON = "Steam authenticated, but its output did not confirm publication of the target Workshop item."
+
+
 def quoted(value):
     if any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise ValueError("Control characters are not allowed in Steam arguments")
@@ -67,8 +70,40 @@ def failure_reason(output, authenticated=False):
     if re.search(r"Failed to (?:update|publish) workshop item", output, re.I):
         return "Steam reported a Workshop publication failure."
     if authenticated:
-        return "Steam authenticated, but its output did not confirm publication of the target Workshop item."
+        return UNCONFIRMED_REASON
     return "Steam returned an unrecognized failure or did not confirm the target Workshop item."
+
+
+def publication_status(output, item_id, returncode, authenticated):
+    """0 = confirmed, 1 = failed, 2 = upload attempted but unconfirmed."""
+    if returncode != 0 or not authenticated:
+        return 1
+    # Inspect the authenticated portion so an earlier Guard prompt cannot turn
+    # an otherwise completed upload into an authentication failure.
+    upload_output = re.split(r"Logon state:\s*Logged On\b", output, flags=re.I)[-1]
+    if re.search(r"\bERROR\b|\bFAILED\b|Created new item", upload_output, re.I):
+        return 1
+    reason = failure_reason(upload_output, authenticated=True)
+    if reason != UNCONFIRMED_REASON:
+        return 1
+    reported_ids = re.findall(
+        r"(?:Published\s+Item|Updated\s+Item|PublishedFileId|File\s*ID)\s*[:=]?\s*([0-9]+)\b",
+        upload_output, re.I)
+    if any(reported != item_id for reported in reported_ids):
+        return 1
+    parenthesized_ids = re.findall(r"Success\.[^\r\n]*\(\s*([0-9]+)\s*\)", upload_output, re.I)
+    if any(reported != item_id for reported in parenthesized_ids):
+        return 1
+    if publication_confirmed(output, item_id):
+        return 0
+    # Exit zero and generic Success. are insufficient proof of publication.
+    # Preserve uncertainty only when every expected upload phase was reached.
+    if all(re.search(pattern, upload_output, re.I) for pattern in (
+        r"Preparing (?:update|content)", r"Uploading (?:content|preview)",
+        r"Committing update", r"Success\.",
+    )):
+        return 2
+    return 1
 
 
 def main():
@@ -154,8 +189,10 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
         # "Committing update...Success.", without repeating the item ID.
         # The manifest and generated VDF above already pin the target item.
         success = publication_confirmed(output, item_id)
-        if result.returncode != 0 or not authenticated or not success:
-            print("SteamCMD did not confirm publication. " + failure_reason(output, authenticated) +
+        status = publication_status(output, item_id, result.returncode, authenticated)
+        if status != 0:
+            prefix = "::warning::Workshop upload attempted; publication is unconfirmed. " if status == 2 else "SteamCMD did not confirm publication. "
+            print(prefix + failure_reason(output, authenticated) +
                   " SteamCMD exit status: " + str(result.returncode) +
                   ". Raw Steam output remains hidden.", file=sys.stderr)
             print("Upload diagnostics: login=" + ("confirmed" if authenticated else "unconfirmed")
@@ -164,7 +201,10 @@ def publish(package, steamcmd, username, item_id, sha, password="", authenticati
                   + ", committing=" + str(bool(re.search(r"Committing update", output, re.I)))
                   + ", success_message=" + str(bool(re.search(r"Success\.", output, re.I)))
                   + ", publication_confirmed=" + str(success), file=sys.stderr)
-            return 1
+            if status == 2:
+                print("Publication status: unconfirmed for Workshop item " + item_id +
+                      " from commit " + sha + ". Check the Workshop item before retrying; no automatic retry.")
+            return status
         print("Published Workshop item " + item_id + " from commit " + sha)
         return 0
 

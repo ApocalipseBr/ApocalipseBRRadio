@@ -93,6 +93,41 @@ class SteamAuthenticationTests(unittest.TestCase):
         self.assertIn("publication_confirmed=False", output)
         self.assertNotIn("Steam requested or rejected Steam Guard", output)
 
+    def test_ambiguous_completed_upload_preserves_session_without_retry_or_claiming_publication(self):
+        status, scripts, output = self.publish([
+            (0, "No cached credentials"),
+            (0, "Steam Guard approval requested\nLogon state: Logged On\n"
+                "Preparing update...Uploading content...Committing update...\n"
+                "Unrecognized completion format\nSuccess.\n"),
+        ])
+        self.assertEqual(2, status)
+        self.assertEqual(2, len(scripts))
+        self.assertTrue(self.marker.exists())
+        self.assertIn("::warning::", output)
+        self.assertIn("Publication status: unconfirmed", output)
+        self.assertNotIn("Published Workshop item", output)
+
+    def test_explicit_failures_never_become_unconfirmed_even_with_all_progress_flags(self):
+        for failure in ["ERROR! Failed to update workshop item.", "Access Denied",
+                        "Committing update...Success. Published Item 3781972601",
+                        "Committing update...Success. (3781972601)",
+                        "Created new item, PublishedFileId " + ITEM]:
+            with self.subTest(failure=failure):
+                status, scripts, _ = self.publish([
+                    (0, "Logon state: Logged On\nPreparing update...Uploading content..."
+                        "Committing update...\n" + failure + "\nSuccess.\n"),
+                ])
+                self.assertEqual(1, status)
+                self.assertEqual(1, len(scripts))
+
+    def test_nonzero_exit_with_all_progress_flags_remains_failed(self):
+        status, scripts, _ = self.publish([
+            (1, "Logon state: Logged On\nPreparing update...Uploading content..."
+                "Committing update...\nUnrecognized format\nSuccess.\n"),
+        ])
+        self.assertEqual(1, status)
+        self.assertEqual(1, len(scripts))
+
     def test_uncertain_upload_or_login_failure_never_retries(self):
         for output in ["Unknown failure", "Uploading content...No cached credentials",
                        "Success.\nNo cached credentials", "Committing update...Success.\n"]:

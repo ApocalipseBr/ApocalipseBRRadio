@@ -146,10 +146,26 @@ jobs:
           fi
           docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
           # Keep the stopped container until the refreshed config has been exported.
+          publish_status=0
           docker run --init --name "$WORKSHOP_CONTAINER" \
             --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
             --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
-            pz-workshop-publisher
+            pz-workshop-publisher || publish_status=$?
+          case "$publish_status" in
+            0)
+              echo "publication=confirmed" >> "$GITHUB_OUTPUT"
+              echo "Workshop publication confirmed." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            2)
+              echo "publication=unconfirmed" >> "$GITHUB_OUTPUT"
+              echo "::warning::Workshop publication is unconfirmed; server restart skipped."
+              echo "Workshop upload attempted, publication unconfirmed. Steam login will be preserved. Server restart skipped; verify the Workshop item before retrying." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "publication=failed" >> "$GITHUB_OUTPUT"
+              exit "$publish_status"
+              ;;
+          esac
       - name: Preserve refreshed Steam login in organization secret
         if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
         env:
@@ -171,7 +187,7 @@ jobs:
           chmod 600 "$RUNNER_TEMP/steam-session/config.vdf"
           python3 .workshop-tools/scripts/workshop/steam_session.py --save "$RUNNER_TEMP/steam-session/config.vdf"
       - name: Request server restart after successful Steam publish
-        if: always() && !cancelled() && steps.steam.outcome == 'success'
+        if: always() && !cancelled() && steps.steam.outcome == 'success' && steps.steam.outputs.publication == 'confirmed'
         env:
           PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
           PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
