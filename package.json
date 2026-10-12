@@ -2,7 +2,7 @@
   "name": "apocalipsebr-radio-tests",
   "private": true,
   "scripts": {
-    "test": "fengari tests/run.lua && node tests/translations_spec.js"
+    "test": "fengari tests/run.lua && node tests/music_scope_spec.js && node tests/translations_spec.js"
   },
   "devDependencies": {
     "fengari": "0.1.5",

@@ -72,11 +72,13 @@ password again issues a new Steam Guard challenge. The
 documents `workshop_build_item` for updating an existing item.
 
 The workflow restores the remembered-login config from `STEAM_CONFIG_VDF` into
-an ephemeral Docker container and checks username-only login with SteamCMD's
-`info` command. It requires exit zero and `Logon state: Logged On`. If this fails,
-it uses `STEAM_PASSWORD` for a fresh login and prints a prompt to approve the
-sign-in in your Steam mobile app, allowing up to five minutes. Failed or timed-out
-authentication stops before uploading. The upload then reuses the confirmed login.
+an ephemeral Docker container. Each SteamCMD script logs in, runs `info`, uploads,
+then quits, so the upload uses that process's authenticated session. A known
+remembered-credential failure before any upload activity permits one fresh attempt
+using `STEAM_PASSWORD`, with a prompt for Steam mobile approval. Unknown failures
+and failed or uncertain uploads never trigger another upload automatically.
+Confirmation requires exit zero, `Logon state: Logged On`, and Workshop commit
+success. Each attempt has a 20-minute timeout; the job has a 30-minute limit.
 
 After confirmed authentication, it copies the resulting config out and updates
 the same organization secret even if the subsequent Workshop operation fails.
@@ -188,7 +190,8 @@ There is no automatic rollback.
 
 Publication failures classify known Steam messages into Guard, rejected login,
 account/game/item access, agreement or connectivity failures and report the
-SteamCMD exit status. Unknown output remains generic. These classifications help
+SteamCMD exit status and safe flags for login, preparation, upload, commit and
+success messages. Unknown output remains generic. These classifications help
 diagnose errors without printing Steam's raw output. Session-secret
 refresh now requires confirmed authentication, but still does not prove publication
 succeeded. Only explicit confirmation of the target Workshop item permits the
@@ -259,15 +262,16 @@ This PR does not change the farming repository.
   documents mobile approval and implements remembered login followed by password
   fallback, then username-only publication. Its
   [authentication source](https://github.com/RageAgainstThePixel/upload-steam/blob/main/src/auth.ts)
-  checks the `info` logon state. This publisher follows that sequence while
-  retaining its existing packaging, secret persistence and private-script handling.
+  checks the `info` logon state. This publisher uses that confirmation but keeps
+  login and upload in the same process, retaining its packaging, secret persistence
+  and private-script handling.
 - [Steam Workshop Deploy](https://github.com/marketplace/actions/steam-workshop-deploy)
   documents stored SteamCMD config or generated TOTP as alternative approaches.
   This workflow does not require a TOTP seed and continues to use the organization
   secret for the remembered config.
 
 Offline regression tests cover remembered-login success, fresh-login fallback,
-missing password, approval timeout, failed-login markers and password protection.
+missing password, uncertain uploads without retries, failed-login markers and password protection.
 Tests run in CI; the first approved login and real Workshop upload still require
 an authenticated live run. Mobile approval is supported by the community approach,
 but has not yet been verified for this account on the home runner.

@@ -13,6 +13,7 @@ local function trim(value)
 end
 
 -- station##player##songId,songId,...##message
+-- Song references accept catalog IDs or registered whole-song sound names.
 -- Only the first three separators are structural; message can contain ##.
 function R.queue(payload, context)
     local function reject(reason)

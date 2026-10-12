@@ -13,8 +13,28 @@ servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-001##my_music##Alice##my
 servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-002##my_music##Alice##mypack_song01,mypack_song02##Enjoy the playlist!
 ```
 
-Payload: `stationId##playerName##songId[,songId...]##message`. Use catalog IDs,
-not titles or sound paths. Message may be empty (keep the final separator), and
+Payload: `stationId##playerName##songId[,songId...]##message`. Each song reference
+may be a registered catalog ID or an exact, case-sensitive script sound name
+(the song registration's `sound` field), not a title or file path. Catalog IDs
+take precedence within the requested station. Sound lookup is scoped to that
+station and returns the first matching song in registration order; it never
+plays an unregistered sound.
+The server resolves the whole batch to catalog IDs before changing any queue.
+Chunk sound names are not whole-song identifiers; chunked songs use catalog IDs.
+
+For the script-based Apocalipse Music Pack backend catalog, use station
+`amp_music` and the `sound` block name unchanged:
+
+```text
+servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-003##amp_music##Alice##AMP_634C866C151BF661##Enjoy!
+```
+
+This resolves `AMP_634C866C151BF661` (Almah - All I Am) to the registered
+`amp_song_634c866c151b` entry. The backend does not need to reconstruct catalog
+IDs from sound hashes. A sound definition must also have a song registration
+on the selected station; the script file alone does not establish eligibility.
+
+Message may be empty (keep the final separator), and
 may contain `##`; station and player names cannot contain the separator. Player
 name is the supplied attribution, and need not be online. Use a new request ID
 for each request; the extension suppresses duplicate relays for one hour.
@@ -125,7 +145,8 @@ Late listeners start the current song from its beginning on their first playback
 heartbeat. Ordinary files cannot seek through the exposed API. Only the server
 tracks the registered song duration to end the broadcast and schedule the next
 segment. Clients receive no elapsed or remaining time and do not estimate a song
-deadline. They follow start/end metadata and the heartbeat timeout instead.
+deadline. They follow native audio completion, local receiver eligibility, and
+the station's start/end metadata. Missing heartbeats never expire active audio.
 
 Whole-file `sound = "MySound"` is preferred. Existing chunk-only catalogs remain
 supported: the receiver starts the first chunk and advances using local playback
@@ -179,6 +200,15 @@ the same broadcast. Server heartbeats identify the active transmission and its
 lifecycle; each receiver starts its own audio at zero. Repeated callbacks for
 the same receiver do not restart audio.
 
+The server sends station lifecycle metadata only, not listener volume or
+receiver-specific stop commands. Client proximity and hearing checks use local
+players (`getSpecificPlayer`), not the server's connected-player list. Moving
+away or stopping a different receiver on one client cannot
+stop another client's emitter. Native device power, tuning, and slider settings
+belong to the physical radio and can be synchronized by the game: turning off
+the same shared world/vehicle radio affects everyone hearing that device.
+Distance attenuation and hardware loudness are still calculated on each client.
+
 Radio music uses non-spatial (2D) playback so cars, placed radios, and portable
 speakers use the same volume curve without game directional panning. Existing
 audio files retain their authored stereo channels; this does not downmix assets.
@@ -209,15 +239,26 @@ Power off, mute, retuning, recorded-media playback, blocked reception,
 unequipping/transferring a portable radio, picking up/removing a placed radio,
 uninstalling/removing a vehicle radio stop and release the owned emitter
 immediately. Song end/replacement preserves the outgoing tail for the next track's crossfade.
-Explicit server stop and missing heartbeats fade to zero over two seconds. Losing heartbeats uses a timeout of three
-complete scans at the target tick rate, with an eight-second minimum, followed
-by the two-second fade. Both authority and receivers use the same station
-registration list to compute this allowance. At one station the timeout is 15.3
-seconds; it grows with station count. Sustained tick rates substantially below
-the target can still cause expiry. End heartbeats repeat during the pause
+Explicit server stop fades to zero over two seconds. Heartbeat silence never
+fades, stops, or restarts a file already playing, including an outgoing song
+held under announcer speech. Proximity and volume are evaluated on every client
+tick independently of packet arrival. The client checks the owned handle with
+`emitter:isPlaying(handle)` and releases it when the file naturally finishes.
+Native FMOD ticking removes completed handles; pending-start handles also count
+as playing. Whole-file completion retains the airing sequence so another packet
+for that same song cannot replay it. Legacy chunk-only songs continue their
+remaining chunks on the local playback clock, then finish after the last chunk.
+End heartbeats repeat during the pause
 so a lost end packet can be recovered on the next heartbeat. A replacement song
 starts at half gain while outgoing audio crossfades to zero. Local time is
-used only for chunk sequencing, fades, retries, and heartbeat expiry.
+used only for chunk sequencing, fades, retries, and discovery snapshot freshness.
+
+`getHeartbeatTimeout()` now limits only cached discovery snapshots: three scans
+at the target tick rate with an eight-second minimum (15.3 seconds for one
+station). A newly loaded/tuned receiver waits for fresh state when that snapshot
+is stale; existing playback remains uninterrupted. If the server stalls or
+disconnects, the current file can finish naturally and the client waits for new
+station state. It does not replay the file to fill the gap.
 
 Playback handles must be positive: a zero or negative result releases the failed
 emitter and retries at most once every two seconds while the broadcast remains
@@ -333,13 +374,16 @@ is not needed to trigger music playback. Client chunk loading may limit which wo
 before the 200-yard cutoff.
 
 While receiver state is retained, duplicate heartbeats never reset the playback
-handle, local start time, or fade-in progress. A heartbeat timeout fades audio
-and marks that airing expired; recovery packets for the same sequence refresh
-metadata but do not replay it. A new server sequence can start normally. Receiver
+handle, local start time, or fade-in progress. Missing packets leave those values
+unchanged; returning packets for the same airing do not restart playback, even
+after its file has naturally completed. Stale sequence/phase packets cannot
+revive playback, and an explicit stop/end is never undone by an old play packet.
+A new server sequence can start normally. Receiver
 removal, retuning, power-off, mute, and leaving range still release state, so
 later listening starts at the beginning as before. Replaced DeviceData settles
 into one new receiver state. Client logs include airing sequence and receiver
-identity; release reasons distinguish eligibility loss from heartbeat expiry.
+identity; release reasons distinguish local eligibility loss from natural file
+completion. The client logs native completion as `Finished locally`.
 
 Speaker profiles use `DeviceData.getBaseVolumeRange()` as the native hardware
 rating, before slider and location effects. Vehicle radios inherit this rating

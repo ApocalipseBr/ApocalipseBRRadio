@@ -195,6 +195,23 @@ for i = voiceStart, #lines do
 end
 assert(voiceCount == 1 and #S.announcerQueues.voice_only == 0,
     "station without catalog talk did not broadcast announcer exactly once")
+-- The backend reads script sound names, while playback uses catalog IDs.
+ABRRadio.registerMusicStation({ id = "sound_lookup", name = "Sound lookup", frequency = 94600 })
+ABRRadio.registerSong({ id = "amp_song_634c866c151b", station = "sound_lookup",
+    sound = "AMP_634C866C151BF661", duration = 281 })
+assert(request("sound_lookup##Alice##AMP_634C866C151BF661,amp_song_634c866c151b##Enjoy"))
+assert(#S.queues.sound_lookup == 2 and S.queues.sound_lookup[1].songId == "amp_song_634c866c151b"
+    and S.queues.sound_lookup[2].songId == "amp_song_634c866c151b", "sound references were not canonicalized")
+assert(not request("jukebox_test##Alice##AMP_634C866C151BF661##Wrong station"))
+assert(not request("sound_lookup##Alice##AMP_634C866C151BF661,amp_634c866c151bf661##Invalid batch"))
+assert(#S.queues.sound_lookup == 2 and #S.notices.sound_lookup == 2
+    and #S.dedications.sound_lookup == 1, "failed sound lookup partially changed state")
+ABRRadio.registerSong({ id = "ambiguous_sound", station = "sound_lookup",
+    sound = "AMP_634C866C151BF661", duration = 281 })
+assert(request("sound_lookup##Alice##AMP_634C866C151BF661##First match"))
+assert(#S.queues.sound_lookup == 3 and S.queues.sound_lookup[3].songId == "amp_song_634c866c151b",
+    "sound lookup did not select the first registered match")
+assert(request("sound_lookup##Alice##amp_song_634c866c151b##"), "catalog ID no longer resolves directly")
 getText = originalText
 ABRRadioServer.tryAcquireChannel, getTimestampMs, ABRRadio.getRadio = originalAcquire, originalClock, originalRadio
 print("PASS: jukebox queues/repeats and independent AI announcer FIFO, validation, ownership, player priority and fallback")

@@ -94,7 +94,7 @@ class WorkshopTests(unittest.TestCase):
             self.assertIn('"publishedfileid" "' + ITEM + '"', vdf)
             self.assertIn(publisher.quoted(str(self.package / "Contents")), vdf)
             self.assertNotIn('"visibility"', vdf)
-            return subprocess.CompletedProcess(args, 0, "Success. Published Item " + ITEM)
+            return subprocess.CompletedProcess(args, 0, "Logon state: Logged On\nSuccess. Published Item " + ITEM)
 
         out = io.StringIO()
         with patch.object(publisher.subprocess, "run", side_effect=steamcmd), contextlib.redirect_stdout(out):
@@ -110,7 +110,7 @@ class WorkshopTests(unittest.TestCase):
             "Committing update...\x1b[0mSuccess.\x1b[0m\nquit\n",
         ]:
             with self.subTest(output=output), \
-                    patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)), \
+                    patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "Logon state: Logged On\n" + output)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(0, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
 

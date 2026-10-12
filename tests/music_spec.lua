@@ -72,10 +72,12 @@ function world:getFreeEmitter(x, y, z)
         attempts[#attempts + 1] = sound
         if failNext then failNext = false; return 0 end
         self.handle = #attempts
+        self.stopped, self.finished = false, false
         return self.handle
     end
     function emitter:stopSoundLocal(handle) assert(handle > 0); self.stopped = true end
     function emitter:stopAll() self.stopped = true end
+    function emitter:isPlaying(handle) return handle == self.handle and not self.stopped and not self.finished end
     function emitter:set3D(handle, value) assert(handle > 0); self.spatial = value end
     function emitter:setVolume(handle, value) assert(handle > 0); self.gain = value end
     function emitter:setPos(px, py, pz) self.position = { px, py, pz } end
@@ -225,9 +227,20 @@ cleanup(); volume, distance = 1, 0
 
 heartbeat("chunks", 11); advance(0.1)
 assert(attempts[#attempts] == "chunk_one", "legacy chunks joined at authority chunk")
-advance(2); heartbeat("chunks", 11); advance(2); heartbeat("chunks", 11)
+advance(2); heartbeat("chunks", 11)
+local chunkStarts = #attempts
+active().emitter.finished = true; advance(delta)
+assert(active().handle == nil and not active().ended and active().chunk == 1,
+    "intermediate chunk completion ended the whole song")
+advance(1.9); heartbeat("chunks", 11)
+assert(#attempts == chunkStarts, "heartbeat replayed a naturally finished chunk")
 advance(1.1)
 assert(attempts[#attempts] == "chunk_two", "legacy chunks did not follow local clock")
+active().emitter.finished = true; advance(delta)
+chunkStarts = #attempts
+heartbeat("chunks", 11); advance(delta)
+assert(active().ended and active().handle == nil and #attempts == chunkStarts,
+    "heartbeat replayed the completed final chunk")
 cleanup()
 heartbeat("both", 12); advance(0.1)
 assert(attempts[#attempts] == "whole_preferred", "whole file did not take precedence")
@@ -286,12 +299,28 @@ installed = false; advance(0.1)
 assert(active() == nil, "uninstalling did not release playback")
 device.getVehicle, device.getInventoryItem = nil, nil
 baseSpeakerRange = 15
-heartbeat("whole", 32); advance(M.getHeartbeatTimeout() + 0.3)
-assert(active().expired and active().ended and C.fading[device], "heartbeat timeout did not fade")
-local expiredStarts = #attempts
-heartbeat("whole", 32); advance(0.1)
-assert(active().expired and active().handle == nil and #attempts == expiredStarts,
-    "recovery heartbeat restarted the expired airing")
+heartbeat("whole", 32); advance(delta)
+local uninterrupted = active()
+local heldEmitter, heldHandle, heldStart = uninterrupted.emitter, uninterrupted.handle, uninterrupted.startedAt
+local previousStarts = #attempts
+advance(M.getHeartbeatTimeout() * 3)
+assert(active() == uninterrupted and active().handle == heldHandle and active().startedAt == heldStart
+    and not active().ended and C.fading[device] == nil and not heldEmitter.stopped,
+    "missing heartbeats interrupted ongoing local playback")
+heartbeat("whole", 32); advance(delta)
+assert(#attempts == previousStarts and active().handle == heldHandle,
+    "returning heartbeat restarted ongoing audio")
+heldEmitter.finished = true; advance(delta)
+assert(active().ended and active().emitter == nil and heldEmitter.returned,
+    "natural end did not release the local emitter")
+heartbeat("whole", 32); advance(delta)
+assert(active().ended and #attempts == previousStarts, "heartbeat replayed a naturally finished airing")
+heartbeat("whole", 33); advance(delta)
+assert(active().handle and #attempts == previousStarts + 1, "new airing did not start after natural completion")
+heartbeat("whole", 33, "stop"); advance(M.FADE_DURATION + delta)
+heartbeat("whole", 33, "play"); advance(delta)
+assert(active().phase == "stop" and #attempts == previousStarts + 1,
+    "heartbeat revived an explicitly stopped airing")
 cleanup()
 M.content.whole.duration = 0.1
 heartbeat("whole", 33); advance(0.3)
@@ -299,6 +328,10 @@ assert(not active().ended and active().handle and C.fading[device] == nil,
     "client still tracks song duration")
 heartbeat("whole", 33, "end")
 local tail = C.fading[device].emitter
+advance(M.getHeartbeatTimeout() * 3)
+assert(C.fading[device] and not tail.stopped, "heartbeat silence stopped an unfinished outgoing tail")
+tail.finished = true; advance(delta)
+assert(tail.returned and C.fading[device] == nil, "naturally finished outgoing tail was not released")
 cleanup()
 assert(tail.returned, "power off did not kill a fading tail")
 M.content.whole.duration = 20
@@ -571,4 +604,4 @@ advance(10)
 assert(math.abs(active().emitter.gain - beforeTransition * 0.5) < 0.000001,
     "long-range attenuation did not respect the half-volume transition")
 cleanup()
-print("PASS: receiver lifecycle, arbitration, round-robin, heartbeat timeout, microphone protection/restoration and discovery budget")
+print("PASS: receiver lifecycle, arbitration, round-robin, lag-independent playback, natural completion, microphone protection/restoration and discovery budget")
