@@ -181,6 +181,8 @@ confirms existing-item updates with `Committing update...Success.` without an
 item ID in that message. The publisher accepts this commit confirmation after
 validating the target ID in the package manifest and setting it in the upload VDF;
 it also accepts the older `Success. Published Item <id>` / `Updated Item` format.
+Console text following the commit confirmation is allowed; any reported item ID
+must match the target, and a new-item creation message is rejected.
 
 Raw Steam output is not printed/uploaded because it can contain account/session
 information. Diagnose Steam login, item ownership, agreements, or connectivity
@@ -191,7 +193,9 @@ There is no automatic rollback.
 Publication failures classify known Steam messages into Guard, rejected login,
 account/game/item access, agreement or connectivity failures and report the
 SteamCMD exit status and safe flags for login, preparation, upload, commit and
-success messages. Unknown output remains generic. These classifications help
+success messages, plus whether publication was confirmed. Steam Guard prompts
+before a confirmed login are not classified as authentication failures.
+Unknown output remains generic. These classifications help
 diagnose errors without printing Steam's raw output. Session-secret
 refresh now requires confirmed authentication, but still does not prove publication
 succeeded. Only explicit confirmation of the target Workshop item permits the

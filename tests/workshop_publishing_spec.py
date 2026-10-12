@@ -108,6 +108,10 @@ class WorkshopTests(unittest.TestCase):
             "Preparing update...Uploading content...Committing update...Success.\nquit\n",
             "Committing update...\r\nSuccess.\r\n",
             "Committing update...\x1b[0mSuccess.\x1b[0m\nquit\n",
+            "Committing update...Success. quit\n",
+            "Committing update...Success.\tSteam>\n",
+            "Committing update...Success. (" + ITEM + ")\n",
+            "Committing update...Success. File ID: " + ITEM + "\n",
         ]:
             with self.subTest(output=output), \
                     patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "Logon state: Logged On\n" + output)), \
@@ -129,6 +133,21 @@ class WorkshopTests(unittest.TestCase):
                 self.assertEqual(1, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
             self.assertNotIn(output, out.getvalue() + err.getvalue())
             self.assertNotIn("secret", out.getvalue() + err.getvalue())
+
+    def test_authenticated_output_cannot_confirm_a_different_item_or_failed_commit(self):
+        self.staged()
+        for output in [
+            "Committing update...Success. Published Item 3781972601\n",
+            "Committing update...Success. File ID: 3781972601\n",
+            "Committing update...Success. (3781972601)\n",
+            "Committing update...Success. Created new item, PublishedFileId " + ITEM + "\n",
+            "Committing update...ERROR! Failed to update workshop item.\nSuccess.\n",
+            "Uploading content...Success.\n",
+        ]:
+            with self.subTest(output=output), \
+                    patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "Logon state: Logged On\n" + output)), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(1, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
 
     def test_password_control_characters_cannot_inject_commands(self):
         for value in ["password\nquit", "password\rquit", "password\0quit"]:
