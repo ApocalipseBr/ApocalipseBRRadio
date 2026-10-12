@@ -1176,13 +1176,13 @@
     "RD_ABR_radio_apocalipse_apo_06_Line05_EN": "If anyone can hear this, please... we need help.",
     "RD_ABR_radio_apocalipse_apo_06_Line05_PTBR": "Se alguem pode ouvir isto, por favor... precisamos de ajuda.",
     "RD_ABR_Jukebox_Queued_EN": "%1 added a song request. Next: %2.",
-    "RD_ABR_Jukebox_Queued_PTBR": "%1 adicionou um pedido de m?sica. Pr?xima: %2.",
+    "RD_ABR_Jukebox_Queued_PTBR": "%1 adicionou um pedido de música. Próxima: %2.",
     "RD_ABR_Jukebox_BatchQueued_EN": "%1 added %2 song requests. Next: %3.",
-    "RD_ABR_Jukebox_BatchQueued_PTBR": "%1 adicionou %2 pedidos de m?sica. Pr?xima: %3.",
+    "RD_ABR_Jukebox_BatchQueued_PTBR": "%1 adicionou %2 pedidos de música. Próxima: %3.",
     "RD_ABR_Jukebox_Message_EN": "Message from %1: %2",
     "RD_ABR_Jukebox_Message_PTBR": "Mensagem de %1: %2",
     "RD_ABR_Jukebox_Remaining_EN": "Songs queued after that: %1.",
-    "RD_ABR_Jukebox_Remaining_PTBR": "M?sicas na fila depois dessa: %1.",
+    "RD_ABR_Jukebox_Remaining_PTBR": "Músicas na fila depois dessa: %1.",
     "RD_ABR_Jukebox_Dedication_EN": "A message from our listeners! %1 says: %2",
     "RD_ABR_Jukebox_Dedication_PTBR": "Um recado dos nossos ouvintes! %1 diz: %2"
 }
