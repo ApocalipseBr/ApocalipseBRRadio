@@ -99,6 +99,17 @@ local function startNext(id, station, state)
     end
 end
 
+-- RCON catalogs may only know script sound names. Resolve those against the
+-- station's registered songs, then keep catalog IDs in the playback queue.
+local function resolveRequestedSong(station, reference)
+    local song = M.content[reference]
+    if song and song.kind == "song" and song.station == station.id then return song end
+    for _, candidate in ipairs(station.songs) do
+        if candidate.sound == reference then return candidate end
+    end
+    return nil, "Unknown song for station: " .. tostring(reference)
+end
+
 -- Validate the entire batch before changing the queue. IDs belong to the
 -- selected station; explicit requests may intentionally repeat a song.
 function S.queueSongs(stationId, songIds, playerName, message)
@@ -113,9 +124,11 @@ function S.queueSongs(stationId, songIds, playerName, message)
     if S.notices[stationId] and #S.notices[stationId] >= S.MAX_QUEUE * 2 then return false, "Station announcements are full" end
     local dedications = S.dedications[stationId] or {}
     if message:find("%S") and #dedications >= S.MAX_QUEUE then return false, "Station messages are full" end
+    local resolvedIds = {}
     for _, songId in ipairs(songIds) do
-        local song = M.content[songId]
-        if not song or song.kind ~= "song" or song.station ~= stationId then return false, "Unknown song for station: " .. tostring(songId) end
+        local song, reason = resolveRequestedSong(station, songId)
+        if not song then return false, reason end
+        resolvedIds[#resolvedIds + 1] = song.id
     end
     S.queues[stationId] = queue
     if message:find("%S") then
@@ -125,7 +138,7 @@ function S.queueSongs(stationId, songIds, playerName, message)
             remaining = S.MESSAGE_REPEATS,
             skipSequence = state and state.entry and state.entry.kind == "song" and state.sequence or nil })
     end
-    for _, songId in ipairs(songIds) do
+    for _, songId in ipairs(resolvedIds) do
         table.insert(queue, { songId = songId, playerName = playerName, message = message })
     end
     local function text(key, args)

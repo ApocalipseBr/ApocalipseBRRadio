@@ -11,6 +11,7 @@ M.PREFIX = "AMP2|"
 M.SCAN_WAIT_TICKS = 50
 M.TARGET_TICKS_PER_SECOND = 10
 M.HEARTBEAT = 5
+-- Freshness of discovery snapshots only; active audio has no heartbeat deadline.
 M.TIMEOUT = 8
 M.MUSIC_NOTE = "[img=music]"
 M.ANNOUNCEMENT_DURATION = 3
@@ -35,8 +36,8 @@ M.PORTABLE_SPEAKER_SCALE = 0.6
 M.VEHICLE_SPEAKER_SCALE = 1
 M.STATIONARY_SPEAKER_SCALE = 1
 
--- Allow three complete scans before expiring a receiver. The scan length grows
--- with station count because the authority processes only one station per tick.
+-- Allow three complete scans before rejecting a cached discovery snapshot.
+-- Scan length grows with station count: the authority visits one per tick.
 function M.getHeartbeatTimeout()
     local scanSeconds = (M.SCAN_WAIT_TICKS + #M.stationIds) / M.TARGET_TICKS_PER_SECOND
     return math.max(M.TIMEOUT, scanSeconds * 3)

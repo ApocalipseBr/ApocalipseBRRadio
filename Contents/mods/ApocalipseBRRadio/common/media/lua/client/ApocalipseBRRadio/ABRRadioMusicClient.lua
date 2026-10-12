@@ -159,7 +159,7 @@ local function fade(device, state, mode)
     if C.fading[device] then stop(C.fading[device]) end
     C.fading[device] = {
         emitter = state.emitter, handle = state.handle, data = state.data,
-        station = state.entry.station, startedAt = C.clock, receivedAt = C.clock,
+        station = state.entry.station, startedAt = C.clock,
         mode = mode or "hold", frames = state.transitionFrames or 0,
         fromGain = state.transitionFrom or state.gain or 0.5,
         gain = state.gain or 0.5,
@@ -247,7 +247,6 @@ local function onDeviceText(guid, codes, x, y, z, text, device, skipProtection)
     if not skipProtection then protect(device, device.getPlayer ~= nil) end
     if not station or not data or data:getChannel() ~= station.frequency or not audible(device, data) then return end
     local state = C.devices[device]
-    if C.fading[device] then C.fading[device].receivedAt = C.clock end
     if state and sequence < state.sequence then return end
     if state and sequence == state.sequence then
         if state.entry.id ~= id or phaseOrder[phase] < phaseOrder[state.phase] then return end
@@ -259,10 +258,9 @@ local function onDeviceText(guid, codes, x, y, z, text, device, skipProtection)
         state = { entry = entry, sequence = sequence, data = data, chunk = 0 }
         C.devices[device] = state
     end
-    -- A late receiver starts at the beginning. End metadata or heartbeat loss
-    -- ends playback; the client does not estimate a song's remaining duration.
+    -- Heartbeats announce state; their absence never interrupts an active file.
+    -- An ended local file retains its sequence so repeats cannot restart it.
     state.phase = phase
-    state.receivedAt = C.clock
     if phase == "transition" and not state.transitionFrames then
         state.transitionFrames, state.transitionFrom = 0, state.gain or 0.5
     end
@@ -281,7 +279,7 @@ function C.applyState(device)
     onDeviceText("", M.encode(packet.id, packet.sequence, packet.phase), 0, 0, 0, "", device, true)
     state = C.devices[device]
     if state and state.sequence == packet.sequence then
-        state.receivedAt, state.packetVersion = packet.receivedAt, packet.version
+        state.packetVersion = packet.version
     end
 end
 
@@ -389,7 +387,6 @@ local function tick()
     guardTransmission()
     C.clock = C.clock + getGameTime():getRealworldSecondsSinceLastUpdate()
     -- Kahlua does not expose Lua's next(). Empty tables already skip pairs loops.
-    local heartbeatTimeout = M.getHeartbeatTimeout()
     for device, tail in pairs(C.fading) do
         local data = device:getDeviceData()
         tail.frames = tail.frames + 1
@@ -402,17 +399,12 @@ local function tick()
             gain = tail.fromGain * math.max(0, 1 - (C.clock - tail.startedAt) / M.FADE_DURATION)
         end
         tail.gain = gain
-        local packet = C.stations[M.stations[tail.station].frequency]
-        local lastReceived = packet and packet.receivedAt or tail.receivedAt
-        if tail.mode == "hold" and C.clock - lastReceived > heartbeatTimeout then
-            tail.mode, tail.startedAt, tail.fromGain = "stop", C.clock, gain
-        end
         local canHear, x, y, z, distanceGain
         if data and data == tail.data and data:getChannel() == M.stations[tail.station].frequency then
             canHear, x, y, z, distanceGain = audible(device, data)
         end
         if not data or data ~= tail.data or data:getChannel() ~= M.stations[tail.station].frequency
-            or not canHear then
+            or not canHear or not tail.emitter:isPlaying(tail.handle) then
             stop(tail)
             C.fading[device] = nil
         else
@@ -425,7 +417,6 @@ local function tick()
     end
     for device, state in pairs(C.devices) do
         local data = device:getDeviceData()
-        local age = C.clock - state.receivedAt
         local canHear, x, y, z, distanceGain
         if data and data == state.data and data:getChannel() == M.stations[state.entry.station].frequency then
             canHear, x, y, z, distanceGain = audible(device, data)
@@ -448,12 +439,16 @@ local function tick()
             stop(state)
             C.devices[device] = nil
         else
-            if age > heartbeatTimeout and not state.expired then
-                fade(device, state, "stop")
-                state.expired = true
-                print("[ABRRadio Music Client] Heartbeat expired: " .. state.entry.station
-                    .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence)
-            elseif (state.phase == "play" or state.phase == "transition") and not state.ended then
+            if state.handle and not state.emitter:isPlaying(state.handle) then
+                stop(state)
+                if state.entry.sound or state.chunk >= #(state.entry.chunks or {}) then
+                    state.ended = true
+                    print("[ABRRadio Music Client] Finished locally: " .. state.entry.station
+                        .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence
+                        .. "; receiver=" .. tostring(device))
+                end
+            end
+            if (state.phase == "play" or state.phase == "transition") and not state.ended then
                 if state.entry.kind == "song" then
                     local localElapsed = state.startedAt and (C.clock - state.startedAt) or 0
                     play(device, state, localElapsed)
