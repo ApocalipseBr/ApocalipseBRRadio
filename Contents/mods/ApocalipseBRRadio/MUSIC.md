@@ -105,22 +105,38 @@ messages, without a player name or song requests:
 
 ```text
 servermsg ##APOCBR_RCON##Radio##QueueAnnouncer##unique-voice-001##my_music##Good evening, survivors.##Keep your radios tuned for more music.
+servermsg ##APOCBR_RCON##Radio##QueueAnnouncer##unique-voice-002##amp_music##-2|Alex: Still with us, Jo?##1.5|Jo: Still here. Keep the music coming.##0|Alex: This next one is for everyone listening tonight.
 ```
 
-Payload: `stationId##message1[##message2...]`. Each message is one future
-between-song broadcast; sequence order is preserved across commands. Commas and
-pipes are literal text; `##` is reserved as the message separator. This hook is
+Payload: `stationId##[adjustmentSeconds|]message1[##[adjustmentSeconds|]message2...]`.
+Each command appends all its messages atomically to the station's FIFO. All
+pending commands play in order in the next song break, keeping conversations
+together before the next song. Commands received during an active song break
+join that conversation; commands received after music resumes wait for the next
+song completion. Commas are literal text; `##` separates messages. A leading
+signed decimal followed by `|` specifies timing; other pipes remain literal text.
+This hook is
 `Radio.QueueAnnouncer`, distinct from `Jukebox.Queue`. The server Lua API is
 `ABRRadioMusicServer.queueAnnouncerMessages(stationId, messages)`.
 
-At each song completion, one pending announcer message replaces the station's
+At each song completion, the pending announcer conversation replaces the station's
 normal catalog talk segment. Active player dedications still air first, once per
 eligible break under their five-repeat lifecycle. Announcer messages play once,
 have no player attribution, and never enter the song, request-announcement, or
 dedication queues. The next song waits until the messages and their reading pause
 finish; existing music end heartbeats continue. Without queued announcer copy,
 the normal catalog talk resumes. Stations without catalog talk can also use this
-queue. Commands received after a break begins apply at the next song completion.
+queue. Request announcements wait while an announcer conversation is airing.
+
+The default pause AFTER each announcer message is 3 real seconds. Its optional
+adjustment adds to that pause: `1.5|Message` waits 4.5 seconds, `-2|Message` waits
+1 second, and `-9|Message` clamps to the minimum of 0.5 seconds. Plain messages
+and `0|Message` retain 3 seconds. The final line receives its full adjusted pause
+before music resumes. The first line waits at least 3 seconds after song completion
+and after any preceding dedication/request notice. Timing is measured from the
+actual successful transmission, so server stalls do not cause lines to burst
+together; station scanning may make pauses longer under load. The Lua API accepts
+plain strings or `{ text = "Message", intervalAdjustment = -2 }` entries.
 
 Up to 25 messages per command, 100 pending per station, and 480 UTF-8 bytes per
 message are accepted. Validation rejects the whole batch if any message is empty,
