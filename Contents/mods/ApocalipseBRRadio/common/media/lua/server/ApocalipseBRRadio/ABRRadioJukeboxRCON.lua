@@ -45,7 +45,7 @@ ApocBRRCON.subscribe("Jukebox", "Queue", R.queue)
 
 -- station##[seconds|]message1##[seconds|]message2...
 -- The signed adjustment controls the pause AFTER its message (default 3s).
-function R.queueAnnouncer(payload, context)
+local function queueAnnouncer(payload, context, colored)
     local function reject(reason)
         print("[ABRRadio Announcer] Rejected requestId=" .. tostring(context and context.requestId) .. ": " .. reason)
         return false, reason
@@ -59,7 +59,26 @@ function R.queueAnnouncer(payload, context)
         boundary = payload:find("##", offset, true)
         local field = trim(boundary and payload:sub(offset, boundary - 1) or payload:sub(offset))
         local timing, text = field:match("^([^|]*)|(.*)$")
-        if timing and trim(timing):match("^[%+%-]?[%d%.]+$") then
+        if colored then
+            local colorField
+            timing, colorField, text = field:match("^([^|]*)|([^|]*)|(.*)$")
+            if not timing or not trim(timing):match("^[%+%-]?[%d%.]+$") then
+                return reject("Expected adjustment|R,G,B|text or adjustment|default|text")
+            end
+            local adjustment = tonumber(trim(timing))
+            if not adjustment then return reject("Invalid announcer interval adjustment") end
+            colorField = trim(colorField)
+            local color
+            if colorField ~= "default" then
+                local r, g, b = colorField:match("^(%d+),(%d+),(%d+)$")
+                r, g, b = tonumber(r), tonumber(g), tonumber(b)
+                if not r or not g or not b or r > 255 or g > 255 or b > 255 then
+                    return reject("Invalid announcer RGB color")
+                end
+                color = { r = r / 255, g = g / 255, b = b / 255 }
+            end
+            messages[#messages + 1] = { text = trim(text), intervalAdjustment = adjustment, color = color }
+        elseif timing and trim(timing):match("^[%+%-]?[%d%.]+$") then
             local adjustment = tonumber(trim(timing))
             if not adjustment then return reject("Invalid announcer interval adjustment") end
             messages[#messages + 1] = { text = trim(text), intervalAdjustment = adjustment }
@@ -77,4 +96,15 @@ function R.queueAnnouncer(payload, context)
     return true, result
 end
 
+function R.queueAnnouncer(payload, context)
+    return queueAnnouncer(payload, context, false)
+end
+
+-- station##adjustment|R,G,B|text##adjustment|default|text...
+-- Only the first two pipes are structural; later pipes belong to the text.
+function R.queueAnnouncerV2(payload, context)
+    return queueAnnouncer(payload, context, true)
+end
+
 ApocBRRCON.subscribe("Radio", "QueueAnnouncer", R.queueAnnouncer)
+ApocBRRCON.subscribe("Radio", "QueueAnnouncerV2", R.queueAnnouncerV2)

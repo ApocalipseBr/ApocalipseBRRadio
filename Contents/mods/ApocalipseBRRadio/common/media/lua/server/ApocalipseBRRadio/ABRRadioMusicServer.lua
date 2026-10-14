@@ -193,7 +193,8 @@ end
 
 -- Announcer copy is independent of song requests and player dedications.
 -- Append each command atomically; drain all lines before the next song.
--- Strings use the default pause; tables supply { text, intervalAdjustment }.
+-- Strings use the default pause; tables supply { text, intervalAdjustment, color }.
+-- Optional color uses normalized RGB and is copied into the validated queue.
 function S.queueAnnouncerMessages(stationId, messages)
     if not M.stations[stationId] or not ABRRadio.isChannelEnabled(stationId) then
         return false, "Unknown or disabled station"
@@ -213,8 +214,20 @@ function S.queueAnnouncerMessages(stationId, messages)
             or adjustment == math.huge or adjustment == -math.huge then
             return false, "Invalid announcer interval adjustment"
         end
+        local color
+        if type(message) == "table" then color = message.color end
+        if color ~= nil then
+            if type(color) ~= "table" then return false, "Invalid announcer RGB color" end
+            for _, component in ipairs({ "r", "g", "b" }) do
+                local value = color[component]
+                if type(value) ~= "number" or value ~= value or value < 0 or value > 1 then
+                    return false, "Invalid announcer RGB color"
+                end
+            end
+            color = { r = color.r, g = color.g, b = color.b }
+        end
         validated[#validated + 1] = { text = text,
-            interval = math.max(S.MIN_ANNOUNCER_INTERVAL, S.ANNOUNCER_INTERVAL + adjustment) }
+            interval = math.max(S.MIN_ANNOUNCER_INTERVAL, S.ANNOUNCER_INTERVAL + adjustment), color = color }
     end
     S.announcerQueues[stationId] = queue
     for _, message in ipairs(validated) do table.insert(queue, message) end
@@ -277,8 +290,8 @@ local function broadcastAnnouncer(id, station, state, now)
     elseif state.noticeAt and now - state.noticeAt < 3000 then return end
     local radio = ABRRadio.getRadio()
     if not radio then return end
-    local color = station.color
     local message = queue[1]
+    local color = message.color or station.color
     radio:SendTransmission(0, 0, station.frequency, message.text, "", "",
         color.r, color.g, color.b, station.signalStrength, false)
     observeBridge("recordAiredLine", station.id, "announcer", message.text)
