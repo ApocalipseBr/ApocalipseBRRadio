@@ -1,5 +1,21 @@
 # Music contract (framework v2.3.0)
 
+## Optional engine observation bridge
+
+The 42.21.0 ApocBR server patch can expose `ApocBRRadioBridge` to server Lua.
+When present, music reports accepted listener requests (canonical song IDs),
+content announced/started/completed/stopped transitions, and successfully sent
+announcer, dedication, catalog-talk and request-notice lines. Heartbeats do not
+repeat content transitions. Request names remain supplied attribution, not proof
+of an online character. Playback state describes the server scheduler; it is not
+client audio confirmation and must not automatically advance backend aired memory.
+
+The API is optional and protected with `pcall`; an unpatched server or a bridge
+failure does not interrupt requests, channel ownership or playback. Engine capture
+is configured separately with `apocbr.bridge.enabled` and `apocbr.bridge.serverKey`.
+The engine bridge documentation defines queue limits, name-based identity and the
+authenticated backend delivery adapter. This mod makes no HTTP requests itself.
+
 ## Zombie attraction
 
 Music station registration accepts `attractZombies = true` (optional boolean,
@@ -176,7 +192,14 @@ ABRRadio.registerMusicTalk({
 
 IDs are stable, unique catalog codes (1-24 ASCII alphanumeric/underscore/hyphen
 characters), not array indices. Duration and timestamps use real seconds.
-Default weight is 10; song repetition is avoided when more than one is available.
+Default weight is 10. Random selection uses weights only among songs that have
+not yet started in that station's current server session. Played song IDs are
+held in memory, survive station disable/re-enable, and reset when the server
+session restarts; nothing is saved to world data. After the catalog is exhausted,
+random music waits rather than repeating (including single-song stations).
+Newly registered songs remain eligible. Command-queued songs may repeat and
+neither consult nor update this random-play history, so a requested song can
+still be selected randomly later in the same session. Talk selection is unchanged.
 Stations with talk entries always play one announcer segment between songs;
 `talkChance` remains accepted for older packs but no longer skips those transitions.
 Song lyrics are not supported. Legacy song `lyrics`, `lyricDuration`, and `lines`

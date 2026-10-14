@@ -374,6 +374,10 @@ Events.EveryOneMinute.fire(); advance(delta)
 assert(countText("queued A") == 1 and S.states.music.entry == nil, "queued text did not get priority")
 Events.EveryOneMinute.fire(); Events.EveryOneMinute.fire()
 assert(countText("queued B") == 1, "queued text lost a line")
+-- These timing checks intentionally replay the single-song fixture through
+-- explicit requests; random rotation now exhausts after its first song.
+S.queues.music = { { songId = "whole" }, { songId = "whole" },
+    { songId = "whole" }, { songId = "whole" } }
 randomHigh = true
 advanceUntil(function() return S.states.music.phase == "play" and S.states.music.entry ~= nil end)
 advanceUntil(function() return S.states.music.phase == "end" end)

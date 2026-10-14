@@ -108,15 +108,17 @@ end
 function M.registerSong(config) register(config, "song") end
 function M.registerTalk(config) register(config, "talk") end
 
-function M.pick(pool, previousId)
+function M.pick(pool, previousId, excludedIds)
     local total = 0
     for _, entry in ipairs(pool) do
-        if #pool == 1 or entry.id ~= previousId then total = total + entry.weight end
+        if (not excludedIds or not excludedIds[entry.id])
+            and (#pool == 1 or entry.id ~= previousId) then total = total + entry.weight end
     end
     if total == 0 then return nil end
     local roll = ZombRand(total)
     for _, entry in ipairs(pool) do
-        if #pool == 1 or entry.id ~= previousId then
+        if (not excludedIds or not excludedIds[entry.id])
+            and (#pool == 1 or entry.id ~= previousId) then
             roll = roll - entry.weight
             if roll < 0 then return entry end
         end

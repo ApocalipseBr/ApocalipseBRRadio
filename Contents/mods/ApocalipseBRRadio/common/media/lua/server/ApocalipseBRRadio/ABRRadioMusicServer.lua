@@ -7,6 +7,8 @@ ABRRadioMusicServer = { states = {}, sequence = getTimestampMs(), ready = false,
     scanIndex = 1, fastStations = 0 }
 local S, M = ABRRadioMusicServer, ABRRadio.music
 S.queues = {}
+-- Session-only random rotation history; explicit requests do not consume it.
+S.playedSongs = {}
 S.notices = {}
 S.dedications = {}
 S.announcerQueues = {}
@@ -17,6 +19,13 @@ S.ANNOUNCER_INTERVAL = 3
 S.MIN_ANNOUNCER_INTERVAL = 0.5
 S.waitTicks = M.SCAN_WAIT_TICKS
 S.LOG_INTERVAL_MS = 60000
+
+-- Optional engine patch. Observation failures must never interrupt playback.
+local function observeBridge(method, ...)
+    if not isServer() or not ApocBRRadioBridge then return end
+    local callback = ApocBRRadioBridge[method]
+    if callback then pcall(callback, ...) end
+end
 
 local function stationLabel(station)
     return ABRRadio.resolveText(station.name) .. " [" .. station.id .. "] @ " .. station.frequency
@@ -55,10 +64,25 @@ local function broadcast(station, state, announcement, lineText)
             local color = station.color
             radio:SendTransmission(0, 0, station.frequency, text, "", "",
                 color.r, color.g, color.b, station.signalStrength, false)
+            if lineText and state.entry.kind == "talk" then
+                observeBridge("recordAiredLine", station.id, "catalog_talk", text)
+            end
             if announcement then state.announcedSequence = state.sequence end
         end
     end
     state.sinceBroadcast = 0
+    -- Report scheduler transitions once per sequence; heartbeats are not events.
+    if isServer() and ApocBRRadioBridge then
+        local phase = state.phase == "announce" and "announced"
+            or (state.phase == "play" or state.phase == "transition") and "started"
+            or state.phase == "end" and "completed" or state.phase == "stop" and "stopped"
+        local key = phase and (tostring(state.sequence) .. ":" .. phase)
+        if key and state.bridgeStateKey ~= key then
+            state.bridgeStateKey = key
+            observeBridge("recordMusicState", station.id, state.entry.id,
+                state.entry.kind, phase, state.sequence, M.caption(state.entry))
+        end
+    end
 end
 
 local function broadcastTalkLine(station, state)
@@ -90,14 +114,19 @@ local function startNext(id, station, state)
     local queue = S.queues[id] or {}
     local requested = not entry and queue[1]
     if requested then entry = M.content[requested.songId] end
-    entry = entry or M.pick(station.songs, state.previousSong)
+    entry = entry or M.pick(station.songs, nil, S.playedSongs[id])
     if entry and ABRRadioServer.tryAcquireChannel(id, "music") then
         if requested then table.remove(queue, 1) end
+        if entry.kind == "song" and not requested then
+            S.playedSongs[id] = S.playedSongs[id] or {}
+            S.playedSongs[id][entry.id] = true
+        end
         state.wantTalk = false
         state.waitReason = nil
         start(station, state, entry)
     else
-        state.waitReason = entry and "waiting_for_channel" or "waiting_for_songs"
+        state.waitReason = entry and "waiting_for_channel"
+            or (#station.songs > 0 and "session_songs_exhausted" or "waiting_for_songs")
     end
 end
 
@@ -157,6 +186,8 @@ function S.queueSongs(stationId, songIds, playerName, message)
     table.insert(notices, text("Remaining", { #queue - 1 }))
     -- Wake the bounded station scan; do not interrupt or restart current audio.
     S.waitTicks = 0
+    observeBridge("recordListenerRequest", stationId, playerName,
+        table.concat(resolvedIds, ","), message, #resolvedIds, #queue)
     return true, #queue
 end
 
@@ -222,6 +253,7 @@ local function broadcastDedication(id, station, state, now)
     local color = station.color
     radio:SendTransmission(0, 0, station.frequency, text, "", "",
         color.r, color.g, color.b, station.signalStrength, false)
+    observeBridge("recordAiredLine", station.id, "dedication", text)
     table.remove(lines, 1)
     dedication.remaining = dedication.remaining - 1
     state.noticeAt = now
@@ -249,6 +281,7 @@ local function broadcastAnnouncer(id, station, state, now)
     local message = queue[1]
     radio:SendTransmission(0, 0, station.frequency, message.text, "", "",
         color.r, color.g, color.b, station.signalStrength, false)
+    observeBridge("recordAiredLine", station.id, "announcer", message.text)
     table.remove(queue, 1)
     state.wantTalk = false
     state.afterTalk = true
@@ -269,8 +302,10 @@ local function broadcastNotice(id, station, state, now)
     local radio = ABRRadio.getRadio()
     if not radio then return end
     local color = station.color
-    radio:SendTransmission(0, 0, station.frequency, table.remove(notices, 1), "", "",
+    local line = table.remove(notices, 1)
+    radio:SendTransmission(0, 0, station.frequency, line, "", "",
         color.r, color.g, color.b, station.signalStrength, false)
+    observeBridge("recordAiredLine", station.id, "request_notice", line)
     state.noticeAt = now
 end
 

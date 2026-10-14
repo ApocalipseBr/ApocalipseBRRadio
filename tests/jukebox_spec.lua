@@ -88,6 +88,9 @@ assert(#S.dedications.jukebox_test == 0, "empty message created repeat entry")
 assert(request("jukebox_test##Alice##juke_a,juke_b##Stay alive"))
 assert(request("jukebox_test##Bob##juke_b##Keep dancing"))
 assert(#S.dedications.jukebox_test == 2, "batch stored message more than once")
+-- Keep enough explicit songs available for the dedication lifetime checks;
+-- the two-song random catalog no longer loops within a session.
+assert(request("jukebox_test##Silent##juke_a,juke_b,juke_a,juke_b##"))
 ABRRadio.registerMusicTalk({ id = "juke_talk", station = "jukebox_test", duration = 5,
     lines = { { at = 0, text = "Normal announcer" } } })
 local acceptedSequence = S.states.jukebox_test.sequence
@@ -199,6 +202,7 @@ assert(voiceCount == 1 and #S.announcerQueues.voice_only == 0,
 -- Conversations drain across commands in one break, with per-line pauses.
 ABRRadio.registerMusicStation({ id = "conversation", name = "Conversation", frequency = 94550 })
 ABRRadio.registerSong({ id = "conversation_song", station = "conversation", sound = "song", duration = 2 })
+ABRRadio.registerSong({ id = "conversation_next", station = "conversation", sound = "song", duration = 2 })
 assert(feed("conversation##-9|Host A: Hello##1.5|Host B: Good evening"))
 assert(feed("conversation##0|Host A: Welcome back"))
 local pending = #S.announcerQueues.conversation
