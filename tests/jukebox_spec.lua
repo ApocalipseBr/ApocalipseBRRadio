@@ -88,6 +88,9 @@ assert(#S.dedications.jukebox_test == 0, "empty message created repeat entry")
 assert(request("jukebox_test##Alice##juke_a,juke_b##Stay alive"))
 assert(request("jukebox_test##Bob##juke_b##Keep dancing"))
 assert(#S.dedications.jukebox_test == 2, "batch stored message more than once")
+-- Keep enough explicit songs available for the dedication lifetime checks;
+-- the two-song random catalog no longer loops within a session.
+assert(request("jukebox_test##Silent##juke_a,juke_b,juke_a,juke_b##"))
 ABRRadio.registerMusicTalk({ id = "juke_talk", station = "jukebox_test", duration = 5,
     lines = { { at = 0, text = "Normal announcer" } } })
 local acceptedSequence = S.states.jukebox_test.sequence
@@ -171,7 +174,7 @@ for _ = 1, 150 do
             assert(playerLines >= 1 and aiLines == 0, "first AI message displaced player message or repeated")
             aiLines = aiLines + 1
         elseif line == "Second AI message" then
-            assert(playerLines >= 2 and aiLines == 1, "AI FIFO or player repeats broken")
+            assert(playerLines >= 1 and aiLines == 1, "AI FIFO or player priority broken")
             aiLines = aiLines + 1
         elseif line == "Default radio voice" then
             assert(aiLines == 2, "default talk ran while AI messages were pending")
@@ -180,7 +183,7 @@ for _ = 1, 150 do
     end
     if defaults >= 1 then break end
 end
-assert(aiLines == 2 and defaults >= 1 and playerLines >= 3, "announcer replacement or fallback did not finish")
+assert(aiLines == 2 and defaults >= 1 and playerLines >= 2, "announcer replacement or fallback did not finish")
 assert(#S.announcerQueues.announcer_test == 0 and #S.announcerQueues.jukebox_test == 1,
     "announcer queues not independent by station")
 ABRRadio.registerMusicStation({ id = "voice_only", name = "No catalog talk", frequency = 94500 })
@@ -195,6 +198,45 @@ for i = voiceStart, #lines do
 end
 assert(voiceCount == 1 and #S.announcerQueues.voice_only == 0,
     "station without catalog talk did not broadcast announcer exactly once")
+
+-- Conversations drain across commands in one break, with per-line pauses.
+ABRRadio.registerMusicStation({ id = "conversation", name = "Conversation", frequency = 94550 })
+ABRRadio.registerSong({ id = "conversation_song", station = "conversation", sound = "song", duration = 2 })
+ABRRadio.registerSong({ id = "conversation_next", station = "conversation", sound = "song", duration = 2 })
+assert(feed("conversation##-9|Host A: Hello##1.5|Host B: Good evening"))
+assert(feed("conversation##0|Host A: Welcome back"))
+local pending = #S.announcerQueues.conversation
+assert(not feed("conversation##0|Valid##1..2|Bad timing"))
+assert(not feed("conversation##0|Valid##2|"))
+assert(not S.queueAnnouncerMessages("conversation", { { text = "Bad", intervalAdjustment = math.huge } }))
+assert(#S.announcerQueues.conversation == pending, "invalid timing partially appended conversation")
+M.stationIds, S.scanIndex, S.fastStations = { "conversation" }, 1, 0
+step(0); step(3); step(2)
+local conversationState = S.states.conversation
+local conversationSequence = conversationState.sequence
+assert(conversationState.phase == "end")
+step(3)
+assert(lines[#lines] == "Host A: Hello")
+step(0.49)
+assert(lines[#lines] == "Host A: Hello", "negative adjustment bypassed minimum pause")
+step(0.01)
+assert(lines[#lines] == "Host B: Good evening", "minimum 0.5s pause did not apply")
+step(4.49)
+assert(lines[#lines] == "Host B: Good evening", "positive adjustment ignored")
+step(0.01)
+assert(lines[#lines] == "Host A: Welcome back", "second command did not air in same break")
+assert(feed("conversation##-2.5|Host C: I just joined"))
+step(2.99)
+assert(lines[#lines] == "Host A: Welcome back", "default pause ignored")
+step(0.01)
+assert(lines[#lines] == "Host C: I just joined", "command arriving during break was deferred")
+assert(conversationState.sequence == conversationSequence and conversationState.phase == "end",
+    "song interrupted conversation")
+step(0.49)
+assert(conversationState.phase == "end", "final reading pause was skipped")
+step(0.01)
+assert(conversationState.phase == "announce" and conversationState.sequence ~= conversationSequence,
+    "next song did not resume after final reading pause")
 -- The backend reads script sound names, while playback uses catalog IDs.
 ABRRadio.registerMusicStation({ id = "sound_lookup", name = "Sound lookup", frequency = 94600 })
 ABRRadio.registerSong({ id = "amp_song_634c866c151b", station = "sound_lookup",

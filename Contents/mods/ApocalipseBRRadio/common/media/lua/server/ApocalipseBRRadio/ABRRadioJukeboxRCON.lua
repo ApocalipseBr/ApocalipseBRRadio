@@ -43,7 +43,8 @@ end
 
 ApocBRRCON.subscribe("Jukebox", "Queue", R.queue)
 
--- station##message1##message2... (commas and pipes are literal message text).
+-- station##[seconds|]message1##[seconds|]message2...
+-- The signed adjustment controls the pause AFTER its message (default 3s).
 function R.queueAnnouncer(payload, context)
     local function reject(reason)
         print("[ABRRadio Announcer] Rejected requestId=" .. tostring(context and context.requestId) .. ": " .. reason)
@@ -56,7 +57,15 @@ function R.queueAnnouncer(payload, context)
     local messages, offset = {}, boundary + 2
     while true do
         boundary = payload:find("##", offset, true)
-        messages[#messages + 1] = trim(boundary and payload:sub(offset, boundary - 1) or payload:sub(offset))
+        local field = trim(boundary and payload:sub(offset, boundary - 1) or payload:sub(offset))
+        local timing, text = field:match("^([^|]*)|(.*)$")
+        if timing and trim(timing):match("^[%+%-]?[%d%.]+$") then
+            local adjustment = tonumber(trim(timing))
+            if not adjustment then return reject("Invalid announcer interval adjustment") end
+            messages[#messages + 1] = { text = trim(text), intervalAdjustment = adjustment }
+        else
+            messages[#messages + 1] = field
+        end
         if #messages > ABRRadioMusicServer.MAX_BATCH then return reject("Invalid batch size") end
         if not boundary then break end
         offset = boundary + 2
