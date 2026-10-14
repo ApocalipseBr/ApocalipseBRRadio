@@ -135,6 +135,23 @@ This hook is
 `Radio.QueueAnnouncer`, distinct from `Jukebox.Queue`. The server Lua API is
 `ABRRadioMusicServer.queueAnnouncerMessages(stationId, messages)`.
 
+Colored messages use the additional `Radio.QueueAnnouncerV2` subscription:
+
+```text
+servermsg "##APOCBR_RCON##Radio##QueueAnnouncerV2##unique-color-001##amp_music##1.5|255,153,0|A warning, with | a literal pipe.##4|default|Back to the music."
+```
+
+Each V2 entry requires `adjustmentSeconds|R,G,B|text`, or
+`adjustmentSeconds|default|text` to inherit the station color. RGB values are
+integers in 0–255, written without spaces between components. The parser splits
+only the first two pipes and normalizes RGB to 0–1. Invalid colors, timings or
+messages reject the whole batch before enqueueing. Legacy `QueueAnnouncer`
+parsing and station colors remain compatible. The Lua queue API can also accept
+`{ text = "Message", intervalAdjustment = 1.5, color = { r = 1, g = 0.6, b = 0 } }`
+with normalized RGB. Colors are copied into the queue and apply to one complete
+transmitted bubble. See [the color protocol guide](../../../docs/radio-announcer-colors.md)
+for the backend generation contract and validation.
+
 At each song completion, the pending announcer conversation replaces the station's
 normal catalog talk segment. Active player dedications still air first, once per
 eligible break under their five-repeat lifecycle. Announcer messages play once,

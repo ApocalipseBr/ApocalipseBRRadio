@@ -5,11 +5,12 @@ ABRRadio.registerMusicStation({ id = "jukebox_test", name = "Jukebox", frequency
 for _, id in ipairs({ "juke_a", "juke_b" }) do
     ABRRadio.registerSong({ id = id, station = "jukebox_test", sound = id, duration = 2, title = id })
 end
-local handler, announcerHandler
+local handler, announcerHandler, announcerV2Handler
 package.preload.ApocBRRCON = function()
     ApocBRRCON = { subscribe = function(module, command, callback)
         if module == "Jukebox" and command == "Queue" then handler = callback
         elseif module == "Radio" and command == "QueueAnnouncer" then announcerHandler = callback
+        elseif module == "Radio" and command == "QueueAnnouncerV2" then announcerV2Handler = callback
         else error("Unexpected RCON subscriber") end
     end }
 end
@@ -237,6 +238,64 @@ assert(conversationState.phase == "end", "final reading pause was skipped")
 step(0.01)
 assert(conversationState.phase == "announce" and conversationState.sequence ~= conversationSequence,
     "next song did not resume after final reading pause")
+-- V2 retains per-message RGB through parsing, validation and native transmission.
+assert(announcerV2Handler, "Colored announcer subscriber missing")
+local function feedV2(payload) return announcerV2Handler(payload, { requestId = "color-test" }) end
+ABRRadio.registerMusicStation({ id = "colors", name = "Colors", frequency = 94560,
+    color = { r = 0.2, g = 0.4, b = 0.6 } })
+ABRRadio.registerSong({ id = "colors_song", station = "colors", sound = "song", duration = 2 })
+ABRRadio.registerSong({ id = "colors_next", station = "colors", sound = "song", duration = 2 })
+assert(feedV2("colors##-2.5|255,153,0|Orange, with | a pipe##1.5|default|Station color"))
+assert(feed("colors##0|Legacy color"))
+assert(S.announcerQueues.colors[1].color.r == 1 and S.announcerQueues.colors[1].color.g == 153 / 255)
+assert(S.announcerQueues.colors[1].text == "Orange, with | a pipe")
+assert(S.announcerQueues.colors[2].color == nil and S.announcerQueues.colors[3].color == nil)
+local colorPending = #S.announcerQueues.colors
+for _, field in ipairs({ "0|256,0,0|Bad", "0|-1,0,0|Bad", "0|1.5,0,0|Bad", "0|1,2|Bad",
+    "0|1,2,3,4|Bad", "0|red|Bad", "0|1,2,3|", "0|default|<bzzt>", "0|Text",
+    "bad|default|Text", "1..2|default|Text" }) do
+    assert(not feedV2("colors##0|255,0,0|Valid##" .. field), "invalid V2 field accepted: " .. field)
+end
+assert(not feedV2("missing##0|default|Text"))
+assert(not feedV2("colors##0|default|" .. string.rep("x", 481)))
+assert(not feedV2("colors##" .. string.rep("0|default|Text##", S.MAX_BATCH) .. "0|default|Text"))
+local colorMax = S.MAX_QUEUE
+S.MAX_QUEUE = colorPending
+assert(not feedV2("colors##0|default|Full"))
+S.MAX_QUEUE = colorMax
+for _, color in ipairs({ { r = 2, g = 0, b = 0 }, { r = 0, g = 0 },
+    { r = 0 / 0, g = 0, b = 0 }, { r = math.huge, g = 0, b = 0 }, false }) do
+    assert(not S.queueAnnouncerMessages("colors", { { text = "Invalid direct color", intervalAdjustment = 0, color = color } }))
+end
+assert(#S.announcerQueues.colors == colorPending, "invalid color partially appended batch")
+local mutableColor = { r = 0, g = 1, b = 0 }
+assert(S.queueAnnouncerMessages("colors", { { text = "Copied color", intervalAdjustment = 0, color = mutableColor } }))
+mutableColor.g = 0
+assert(S.announcerQueues.colors[4].color.g == 1, "queue retained caller's mutable color")
+local priorRadio = ABRRadio.getRadio
+local transmitted = {}
+ABRRadio.getRadio = function() return { SendTransmission = function(_, x, y, channel, text, guid, codes, r, g, b)
+    transmitted[text] = { r = r, g = g, b = b }
+end } end
+M.stationIds, S.scanIndex, S.fastStations = { "colors" }, 1, 0
+step(0); step(3); step(2); step(3)
+assert(transmitted["Orange, with | a pipe"].r == 1 and transmitted["Orange, with | a pipe"].g == 153 / 255)
+step(0.49)
+assert(not transmitted["Station color"], "V2 color changed minimum pause")
+step(0.01)
+assert(transmitted["Station color"].r == 0.2 and transmitted["Station color"].b == 0.6)
+step(4.49)
+assert(not transmitted["Legacy color"], "V2 default color changed positive pause")
+step(0.01)
+assert(transmitted["Legacy color"].r == 0.2, "legacy message lost station color")
+step(3)
+assert(transmitted["Copied color"].g == 1)
+step(2.99)
+assert(S.states.colors.phase == "end", "V2 skipped final pause")
+step(0.01)
+assert(S.states.colors.phase == "announce" and #S.announcerQueues.colors == 0)
+ABRRadio.getRadio = priorRadio
+
 -- The backend reads script sound names, while playback uses catalog IDs.
 ABRRadio.registerMusicStation({ id = "sound_lookup", name = "Sound lookup", frequency = 94600 })
 ABRRadio.registerSong({ id = "amp_song_634c866c151b", station = "sound_lookup",
